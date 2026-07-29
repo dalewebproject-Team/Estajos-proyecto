@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+.env.local
+.claude/
+.claude/*
+.env
+.env.*
+.env.local
+.DS_Store
+*.log
+npm-debug.log*
+.vercel
+PANICO-PRIVADO*

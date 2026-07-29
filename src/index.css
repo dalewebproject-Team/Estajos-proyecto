@@ -1,0 +1,191 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─────────────────────────────────────────────────────────
+ *  RESET BASE — Móvil primero (~400px de ancho lógico)
+ * ───────────────────────────────────────────────────────── */
+html, body, #root {
+  height: 100%;
+  min-height: 100vh;
+}
+
+body {
+  background-color: #f5f6fa; /* app-bg */
+  color: #1a2332;            /* navy-dark — texto principal */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Bloquea el "rebote" elástico de iOS en el shell de la app */
+  overscroll-behavior: none;
+}
+
+/* ─────────────────────────────────────────────────────────
+ *  UTILIDADES (Sección 16 de la Guía Técnica CSS)
+ * ───────────────────────────────────────────────────────── */
+
+/* Ocultar scrollbar — usado en navegación horizontal */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Quitar flechas de input[type=number] */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* ─────────────────────────────────────────────────────────
+ *  CAPA DE COMPONENTES — clases reutilizables
+ *  (alias de las combinaciones largas de Tailwind de la guía)
+ * ───────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────
+ *  ANIMACIONES OPTIMIZADAS (Emil Design Engineering)
+ * ───────────────────────────────────────────────────────── */
+
+@layer base {
+  :root {
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* Card base */
+  .card {
+    @apply bg-white rounded-2xl p-5 shadow-sm;
+    transition: transform 150ms var(--ease-out), box-shadow 150ms var(--ease-out);
+  }
+  .card:active {
+    transform: scale(0.98);
+  }
+
+  /* Input estándar */
+  .input-base {
+    @apply w-full mt-1.5 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl
+           text-sm text-navy-dark placeholder-gray-400
+           focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent;
+    transition: background-color 150ms var(--ease-out),
+                border-color 150ms var(--ease-out),
+                box-shadow 150ms var(--ease-out);
+  }
+
+  /* Label */
+  .label-base {
+    @apply text-xs font-semibold text-gray-500 uppercase tracking-wider;
+  }
+
+  /* Button animations */
+  .btn {
+    @apply inline-flex items-center justify-center font-semibold rounded-lg
+           transition-transform duration-160 active:scale-97;
+    transform: translateZ(0);
+    will-change: transform;
+  }
+
+  /* Modal animations */
+  .modal-overlay {
+    animation: fadeIn 200ms var(--ease-out) forwards;
+  }
+
+  .modal-content {
+    animation: slideUp 300ms var(--ease-out) forwards;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideUp {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Toast/notification animations */
+  .toast {
+    animation: toastEnter 200ms var(--ease-out) forwards;
+  }
+
+  .toast.exit {
+    animation: toastExit 150ms var(--ease-out) forwards;
+  }
+
+  @keyframes toastEnter {
+    from {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes toastExit {
+    from {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+  }
+
+  /* Smooth list item animations */
+  .list-item {
+    animation: listItemEnter 200ms var(--ease-out) forwards;
+  }
+
+  @keyframes listItemEnter {
+    from {
+      opacity: 0;
+      transform: translateX(-12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  /* Fade transitions for page changes */
+  .page-fade-enter {
+    animation: pageFadeIn 250ms var(--ease-out) forwards;
+  }
+
+  @keyframes pageFadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}

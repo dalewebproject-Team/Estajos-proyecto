@@ -1,0 +1,190 @@
+import { supabase } from '../supabase.js'
+
+/**
+ * ─── TRABAJADORES (empleados) ──────────────────────────────────────────────
+ *
+ * FIX: getTrabajadorPorId ahora funciona para admin Y para encargado.
+ *
+ * El encargado se autentica como anónimo (login_encargado RPC, no Supabase Auth).
+ * La query directa a `empleados` requiere JWT admin → permission denied para anónimos.
+ * Solución: intentar query directa primero (admin); si falla por permisos,
+ * usar la RPC get_empleado_por_id que corre con SECURITY DEFINER (bypasea RLS).
+ *
+ * El encargado recibe solo: id, nombre, teléfono — sin tarifas ni saldos.
+ * Los campos de salario no se muestran en SeccionEncargadoPage por diseño.
+ */
+
+
+// ── Mapeo v6.0 ⇄ app ────────────────────────────────────────────────────
+// La tabla v6.0 usa nombre_completo / pago_x_hora / tipo_pago; la app usa
+// nombre / tarifa_hora / payment_period. Se traduce en esta capa para no
+// tocar formularios ni páginas. Ya no hay `activo` (borrado físico): se
+// expone `activo: true` sintético para el código que aún lo lee.
+const SELECT_EMPLEADO =
+  'id, nombre:nombre_completo, telefono, codigo_corto, payment_period:tipo_pago, tarifa_hora:pago_x_hora, es_encargado'
+
+const conActivo = (e) => e && { ...e, activo: true }
+
+// Traduce un payload {nombre, tarifa_hora, payment_period, ...} de la app a
+// las columnas v6.0. Solo incluye las claves presentes (para updates).
+function aColumnasV6(datos) {
+  const out = {}
+  if ('nombre' in datos)         out.nombre_completo = datos.nombre
+  if ('telefono' in datos)       out.telefono        = datos.telefono
+  if ('tarifa_hora' in datos)    out.pago_x_hora     = datos.tarifa_hora
+  if ('payment_period' in datos) out.tipo_pago       = datos.payment_period
+  if ('es_encargado' in datos)   out.es_encargado    = datos.es_encargado
+  return out
+}
+
+// ── Admin: acceso completo ─────────────────────────────────────────────────
+
+/**
+ * `periodo = 'encargados'` filtra por `es_encargado`; otro valor filtra por
+ * ciclo (`tipo_pago`). v6.0 ya no tiene empleados temporales en esta tabla
+ * (viven en `temporal`), así que no hay filtro de `es_temporal`.
+ */
+export async function listarTrabajadores({ periodo = 'todos', busqueda = '' } = {}) {
+  let query = supabase
+    .from('empleados')
+    .select(SELECT_EMPLEADO)
+    .order('nombre_completo')
+
+  if (periodo === 'encargados') {
+    query = query.eq('es_encargado', true)
+  } else if (periodo !== 'todos') {
+    query = query.eq('tipo_pago', periodo)
+  }
+
+  if (busqueda) query = query.or(`nombre_completo.ilike.%${busqueda}%,telefono.ilike.%${busqueda}%`)
+
+  const { data, error } = await query
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(conActivo)
+}
+
+/**
+ * Obtiene un empleado por UUID o por su código corto numérico
+ * (codigo_corto, mostrado bajo el QR para entrada manual).
+ * Funciona tanto para admin (query directa, todos los campos)
+ * como para encargado (RPC SECURITY DEFINER, solo campos básicos).
+ */
+export async function getTrabajadorPorId(id) {
+  const valor = String(id).trim()
+  // Si es solo dígitos, se trata del codigo_corto; si no, es el UUID
+  const esCodigoCorto = /^\d+$/.test(valor)
+  const columna       = esCodigoCorto ? 'codigo_corto' : 'id'
+  const valorConsulta = esCodigoCorto ? Number(valor) : valor
+
+  // Intento 1: query directa — funciona si el usuario tiene JWT admin
+  const { data, error } = await supabase
+    .from('empleados')
+    .select(SELECT_EMPLEADO)
+    .eq(columna, valorConsulta)
+    .single()
+
+  if (!error) return conActivo(data)   // admin → OK
+
+  // Si el error es de permisos (encargado anónimo → permission denied / no rows)
+  // caer a la RPC que bypasea RLS
+  const isPermissionError =
+    error.code === 'PGRST116' ||          // 0 rows (RLS filtró el resultado)
+    error.message?.includes('permission') ||
+    error.message?.includes('denied') ||
+    error.message?.includes('policy')
+
+  if (!isPermissionError) throw new Error(error.message) // error real, propagar
+
+  // Intento 2: RPC con SECURITY DEFINER — funciona para anónimos (encargado)
+  const rpcName   = esCodigoCorto ? 'get_empleado_por_codigo' : 'get_empleado_por_id'
+  const rpcParams = esCodigoCorto ? { p_codigo: valorConsulta } : { p_empleado_id: valorConsulta }
+
+  const { data: rpcData, error: rpcError } = await supabase.rpc(rpcName, rpcParams)
+
+  if (rpcError) throw new Error(rpcError.message)
+
+  const empleado = Array.isArray(rpcData) ? rpcData[0] : rpcData
+  if (!empleado) throw new Error('Trabajador no encontrado.')
+
+  // La RPC devuelve nombre_completo → mapear a la forma que usa la app.
+  return conActivo({
+    id: empleado.id,
+    nombre: empleado.nombre_completo,
+    telefono: empleado.telefono,
+    codigo_corto: empleado.codigo_corto,
+  })
+}
+
+export async function crearTrabajador(payload) {
+  const { data, error } = await supabase
+    .from('empleados').insert(aColumnasV6(payload)).select(SELECT_EMPLEADO).single()
+  if (error) {
+    // Código 23505 = unique_violation de Postgres. Se traduce el mensaje
+    // crudo de la constraint "empleados_telefono_key" a algo legible; para
+    // cualquier otro error se conserva el mensaje original sin modificar.
+    if (error.code === '23505' || error.message?.includes('empleados_telefono_key')) {
+      throw new Error('Ya existe un trabajador registrado con este número de teléfono.')
+    }
+    throw new Error(error.message)
+  }
+  return conActivo(data)
+}
+
+export async function actualizarTrabajador(id, datos) {
+  const { data, error } = await supabase
+    .from('empleados')
+    .update(aColumnasV6(datos))
+    .eq('id', id)
+    .select(SELECT_EMPLEADO)
+    .single()
+  if (error) throw new Error(error.message)
+  return conActivo(data)
+}
+
+export async function eliminarTrabajador(id) {
+  // v6.0: borrado FÍSICO (sin `activo`). El trigger de BD bloquea el delete
+  // si el empleado tiene una jornada de encargado activa en curso.
+  //
+  // Mitigación temporal (auditoría 2026-07-29): las FK hacia pago_empleado,
+  // adelanto_empleado, jornada_empleado y jornada_encargado son ON DELETE
+  // CASCADE, así que este delete borraría recibos y jornadas reales sin
+  // aviso. jornada_encargado cubre el turno propio de un empleado que es o
+  // fue encargado — vive en tabla aparte de jornada_empleado, así que hace
+  // falta chequearla por separado (corrección 2026-07-29 a la auditoría
+  // original, que omitió esta FK). Hasta que exista la liquidación forzada
+  // (RPC dedicada), se bloquea aquí si hay cualquier historial asociado.
+  const [pagos, adelantos, jornadas, jornadasEncargado] = await Promise.all([
+    supabase.from('pago_empleado').select('id', { count: 'exact', head: true }).eq('empleado_id', id),
+    supabase.from('adelanto_empleado').select('id', { count: 'exact', head: true }).eq('empleado_id', id),
+    supabase.from('jornada_empleado').select('id', { count: 'exact', head: true }).eq('empleado_id', id),
+    supabase.from('jornada_encargado').select('id', { count: 'exact', head: true }).eq('encargado_id', id),
+  ])
+  for (const r of [pagos, adelantos, jornadas, jornadasEncargado]) {
+    if (r.error) throw new Error(r.error.message)
+  }
+  const motivos = []
+  if (pagos.count > 0) motivos.push(`${pagos.count} pago(s)`)
+  if (adelantos.count > 0) motivos.push(`${adelantos.count} adelanto(s)`)
+  if (jornadas.count > 0) motivos.push(`${jornadas.count} jornada(s)`)
+  if (jornadasEncargado.count > 0) motivos.push(`${jornadasEncargado.count} jornada(s) de encargado`)
+  if (motivos.length > 0) {
+    throw new Error(
+      `No se puede dar de baja: este trabajador tiene ${motivos.join(', ')} registrados. ` +
+      `La baja está deshabilitada mientras no exista un flujo de liquidación forzada — contacta a soporte.`
+    )
+  }
+
+  const { error } = await supabase.from('empleados').delete().eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+/**
+ * Balance pendiente del trabajador (RPC).
+ * Solo el admin lo usa — el encargado no ve salarios por diseño.
+ */
+export async function getBalanceTrabajador(id) {
+  const { data, error } = await supabase
+    .rpc('calcular_balance_trabajador', { p_empleado_id: id })
+  if (error) throw new Error(error.message)
+  return Number(data) || 0
+}
